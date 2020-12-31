@@ -16,31 +16,29 @@ class Itermediate: # puns are a sign of good code, amirite
   out: torch.Tensor
 
 class IternetMult(nn.Module):
-  def __init__(self, widths):
+  def __init__(self, width):
     super(IternetMult, self).__init__()
-    self.widths = widths
-    self.layers = []
-    prev_width = 3
-    for i in range(len(widths)):
-      width = widths[i]
-      next_width = widths[i + 1] if i < len(widths) - 1 else 0
-      layer = nn.Parameter(torch.normal(
-        mean=torch.zeros(prev_width + next_width, width),
-        std=1,
-      ) * np.sqrt(2.0 / width))
-      setattr(self, f'l{i}', layer)
-      self.layers.append(layer)
-      prev_width = width
+    # constants
+    self.width = width
+    hidden_inp_size = 2 + 1 + width # 2 true inputs, 1 for 1's, width for hiddens
+    self.hidden_w_mask = torch.ones(hidden_inp_size, width)
+
+    # parameters
+    self.hidden_w = nn.Parameter(torch.normal(
+      mean=torch.zeros(hidden_inp_size, width),
+      std=1
+    ) * np.sqrt(2.0 / width))
     self.last = nn.Parameter(torch.normal(
-      mean=torch.zeros(widths[-1], 1),
+      mean=torch.zeros(width, 1),
       std=1.0
     ) * np.sqrt(2.0))
+
 
   def init_itermediate(self, inp):
     ones = torch.ones(inp.shape[0])[:, None]
     expanded_inp = torch.cat([ones, inp], dim=1)
     batch_size = inp.shape[0]
-    hidden = [torch.zeros(batch_size, width) for width in self.widths]
+    hidden = torch.zeros(batch_size, self.width)
     out = torch.zeros(batch_size, 1)
     return Itermediate(
       expanded_inp,
@@ -54,25 +52,72 @@ class IternetMult(nn.Module):
     for _ in range(iters):
       itermediate = self.iterate(itermediate)
     return itermediate.out[:, 0]
-    
+
   def iterate(self, itermediate):
-    hidden = []
-    def compute_layer(inp, weight):
-      normalized_weight = weight / torch.sqrt(torch.sum(weight ** 2, dim=0)[None, :])
-      res = functional.relu(torch.matmul(inp, normalized_weight))
-      hidden.append(res)
-
-    current_inp = torch.cat([itermediate.inp, itermediate.hidden[1]], dim=1)
-    compute_layer(current_inp, self.l0)
-
-    for i in range(1, len(self.widths) - 1):
-      current_inp = torch.cat([hidden[i - 1], itermediate.hidden[i + 1]], dim=1)
-      compute_layer(current_inp, self.layers[i])
-
-    compute_layer(hidden[-1], self.layers[-1])
-
-    out = torch.matmul(hidden[-1], self.last)
+    inp = torch.cat([itermediate.inp, itermediate.hidden], dim=1)
+    adj_hidden_w = self.hidden_w * self.hidden_w_mask
+    normalized_hidden_w = adj_hidden_w / torch.sqrt(torch.sum(adj_hidden_w ** 2, dim=0)[None, :])
+    hidden = functional.relu(torch.matmul(inp, normalized_hidden_w))
+    out = torch.matmul(hidden, self.last)
     return Itermediate(itermediate.inp, hidden, out)
+#class IternetMult(nn.Module):
+#  def __init__(self, widths):
+#    super(IternetMult, self).__init__()
+#    self.widths = widths
+#    self.layers = []
+#    prev_width = 3
+#    for i in range(len(widths)):
+#      width = widths[i]
+#      next_width = widths[i + 1] if i < len(widths) - 1 else 0
+#      layer = nn.Parameter(torch.normal(
+#        mean=torch.zeros(prev_width + next_width, width),
+#        std=1,
+#      ) * np.sqrt(2.0 / width))
+#      setattr(self, f'l{i}', layer)
+#      self.layers.append(layer)
+#      prev_width = width
+#    self.last = nn.Parameter(torch.normal(
+#      mean=torch.zeros(widths[-1], 1),
+#      std=1.0
+#    ) * np.sqrt(2.0))
+#
+#  def init_itermediate(self, inp):
+#    ones = torch.ones(inp.shape[0])[:, None]
+#    expanded_inp = torch.cat([ones, inp], dim=1)
+#    batch_size = inp.shape[0]
+#    hidden = [torch.zeros(batch_size, width) for width in self.widths]
+#    out = torch.zeros(batch_size, 1)
+#    return Itermediate(
+#      expanded_inp,
+#      hidden,
+#      out
+#    )
+#    
+#
+#  def forward(self, inp, iters):
+#    itermediate = self.init_itermediate(inp)
+#    for _ in range(iters):
+#      itermediate = self.iterate(itermediate)
+#    return itermediate.out[:, 0]
+#    
+#  def iterate(self, itermediate):
+#    hidden = []
+#    def compute_layer(inp, weight):
+#      normalized_weight = weight / torch.sqrt(torch.sum(weight ** 2, dim=0)[None, :])
+#      res = functional.relu(torch.matmul(inp, normalized_weight))
+#      hidden.append(res)
+#
+#    current_inp = torch.cat([itermediate.inp, itermediate.hidden[1]], dim=1)
+#    compute_layer(current_inp, self.l0)
+#
+#    for i in range(1, len(self.widths) - 1):
+#      current_inp = torch.cat([hidden[i - 1], itermediate.hidden[i + 1]], dim=1)
+#      compute_layer(current_inp, self.layers[i])
+#
+#    compute_layer(hidden[-1], self.layers[-1])
+#
+#    out = torch.matmul(hidden[-1], self.last)
+#    return Itermediate(itermediate.inp, hidden, out)
 
 
 class DirectMult(nn.Module):
@@ -103,8 +148,8 @@ class DirectMult(nn.Module):
     out = torch.matmul(x, self.last)
     return out[:, 0]
 
-model = IternetMult(widths=[20, 20])
-direct = DirectMult(widths=[28, 28])
+model = IternetMult(width=25)
+direct = DirectMult(widths=[175])
 batch_size = 111
 train_iters = 5
 loss_fn = nn.MSELoss()
